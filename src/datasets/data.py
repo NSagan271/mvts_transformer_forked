@@ -11,6 +11,8 @@ import pandas as pd
 from tqdm import tqdm
 from sktime.datasets import load_from_tsfile_to_dataframe
 
+from scipy import signal
+
 from datasets import utils
 
 import h5py
@@ -458,12 +460,11 @@ class BatVocalizationData(BaseData):
         max_seq_len: maximum sequence (time series) length. Used only if script argument `max_seq_len` is not defined.
     """
 
-    def __init__(self, root_dir='../data', file_list=None, n_proc=1, pattern=None, limit_size=None, config=None):
+    def __init__(self, root_dir='../data', nfft=256, fft_stride=64, file_list=None, n_proc=1, pattern=None, limit_size=None, config=None):
         self.set_num_processes(n_proc=n_proc)
-        # self.feature_names = ['mic_1', 'mic_2', 'mic_3', 'mic_4', 'centroid_x', 'centroid_y', 'centroid_z']
-        self.feature_names = ['mic_1', 'mic_2', 'mic_3', 'mic_4']
+        self.feature_names = ['freq_' + str(i) for i in range(nfft//2+1)]
 
-        self.all_df, self.max_seq_len = self.load_all(root_dir, window_len=config['data_window_len'], file_list=file_list, pattern=pattern)
+        self.all_df, self.max_seq_len = self.load_all(root_dir, nfft=nfft, fft_stride=fft_stride, file_list=file_list, pattern=pattern)
         # self.all_df = self.all_df.sort_values(by=['dataset_idx'])  # datasets is presorted
         self.all_df = self.all_df.set_index('ID')
         self.all_IDs = self.all_df.index.unique()  # all sample (session) IDs
@@ -478,7 +479,7 @@ class BatVocalizationData(BaseData):
 
         self.feature_df = self.all_df[self.feature_names]
 
-    def load_all(self, root_dir, window_len=None, file_list=None, pattern=None):
+    def load_all(self, root_dir, nfft, fft_stride, file_list=None, pattern=None):
         """
         Loads datasets from MAT files contained in `root_dir` into a dataframe, optionally choosing from `pattern`
         Args:
@@ -510,25 +511,25 @@ class BatVocalizationData(BaseData):
         seqs = []
         for path in input_paths:
             seqs.extend(BatVocalizationData.load_single_file(path))
-        max_seq_len= window_len if window_len is not None else max(list(map(lambda mat: mat.shape[1], seqs)))
+        max_seq_len= 0
 
         all_df = None
         current_ID = 0
         for seq in seqs:
-            df = pd.DataFrame(seq.T[:, 0:4], columns=self.feature_names)
-            dataset_idx = np.ones(seq.shape[1]) * current_ID
-            if window_len is not None:
-                num_windows = (seq.shape[1] + window_len - 1) // window_len
-                window_len_curr_seq = (seq.shape[1] + num_windows - 1) // num_windows
-                dataset_idx = [i // window_len_curr_seq + current_ID for i in range(seq.shape[1])]
-                # print(seq.shape[1] % window_len_curr_seq)
-            current_ID = max(dataset_idx) + 1
-            df['time_ms'] = df.index / 250
-            df.insert(loc=0, column='ID', value=dataset_idx)
-            if all_df is None:
-                all_df = df
-            else:
-                all_df = pd.concat((all_df, df))
+            for mic in range(4):
+                x = seq.T[:, mic]
+                Sx = 20 * np.log10(signal.spectrogram(x, nfft=nfft, noverlap=nfft-fft_stride)[2].T)
+                df = pd.DataFrame(Sx, columns=self.feature_names)
+                max_seq_len = max(max_seq_len, len(df.index))
+                dataset_idx = np.ones(len(df.index)) * current_ID
+            
+                current_ID = current_ID + 1
+                df['time_ms'] = df.index / 250 * fft_stride
+                df.insert(loc=0, column='ID', value=dataset_idx)
+                if all_df is None:
+                    all_df = df
+                else:
+                    all_df = pd.concat((all_df, df))
 
         return all_df, max_seq_len
     

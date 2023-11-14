@@ -16,7 +16,7 @@ build
 *.pyc
 
 # Jupyter
-*.ipynb
+#*.ipynb
 .ipynb_checkpoints
 
 # Doc
@@ -34,3 +34,4 @@ logs
 experiments/
 
 *.xls
+mvts_env
